@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:math' as math;
 import 'dart:async';
+import 'user_credentials.dart';
 
 // ─── Supabase Config ────────────────────────────────────────────────────────
 const String _supabaseUrl = 'https://bltnpahunoeyudwyhqur.supabase.co';
@@ -9,8 +10,14 @@ const String _supabaseKey = 'sb_publishable_6Gafu7dYSpFeBpyoJEHutQ_MNGzgR7X';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Supabase.initialize(url: _supabaseUrl, anonKey: _supabaseKey);
-  runApp(const MyApp());
+  String? initError;
+  try {
+    await Supabase.initialize(url: _supabaseUrl, publishableKey: _supabaseKey);
+  } catch (e) {
+    initError = e.toString();
+    debugPrint('❌ Supabase init failed: $e');
+  }
+  runApp(MyApp(initError: initError));
 }
 
 final _supabase = Supabase.instance.client;
@@ -19,7 +26,9 @@ final String _sessionId =
 
 // ─── App Root ────────────────────────────────────────────────────────────────
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  final String? initError;
+  const MyApp({super.key, this.initError});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -30,9 +39,80 @@ class MyApp extends StatelessWidget {
         fontFamily: 'Roboto',
       ),
       debugShowCheckedModeBanner: false,
-      home: const VotingScreen(),
+      home: initError != null ? _ErrorScreen(error: initError!) : const UserLoginScreen(),
     );
   }
+}
+
+// Shows a clear error instead of a blank white screen
+class _ErrorScreen extends StatelessWidget {
+  final String error;
+  const _ErrorScreen({required this.error});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.red.shade50,
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.error_outline, color: Colors.red.shade700, size: 64),
+              const SizedBox(height: 16),
+              Text(
+                '⚠️ Supabase Initialization Failed',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.red.shade700,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Check that your Supabase URL and anon key are correct.\nThe anon key should start with "eyJ..."',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.grey.shade700, fontSize: 14),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade100,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  error,
+                  style: TextStyle(fontSize: 12, color: Colors.red.shade900, fontFamily: 'monospace'),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Candidate Image Fallback Map ────────────────────────────────────────────
+// Provides guaranteed working images for candidates whose Supabase image_url is empty/broken.
+const Map<String, String> _candidateImages = {
+  'ajith kumar':
+      'https://upload.wikimedia.org/wikipedia/commons/5/50/Ajith_kumar_2019.jpg',
+  'sai pallavi':
+      'https://upload.wikimedia.org/wikipedia/commons/e/ee/Sai_Pallavi_at_Mca-pre-release-event.jpg',
+};
+
+String _resolveImage(String? rawUrl, String name) {
+  final key = name.trim().toLowerCase();
+  if (_candidateImages.containsKey(key)) {
+    return _candidateImages[key]!;
+  }
+  if (rawUrl != null && rawUrl.trim().isNotEmpty) return rawUrl.trim();
+  return '';
 }
 
 // ─── Candidate Model ─────────────────────────────────────────────────────────
@@ -50,18 +130,305 @@ class Candidate {
   });
 
   factory Candidate.fromJson(Map<String, dynamic> json) {
+    final name = json['name']?.toString() ?? '';
+    final rawUrl = json['image_url']?.toString();
     return Candidate(
       id: json['id']?.toString() ?? '',
-      name: json['name']?.toString() ?? '',
-      imageUrl: json['image_url']?.toString() ?? '',
+      name: name,
+      imageUrl: _resolveImage(rawUrl, name),
       votes: (json['votes'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
+// ─── Candidate Avatar Widget ─────────────────────────────────────────────────
+// StatelessWidget using Image.network + errorBuilder — NO setState, NO frame crash.
+class _CandidateAvatar extends StatelessWidget {
+  final String imageUrl;
+  final String name;
+  final double radius;
+  final bool showWinnerBadge;
+
+  const _CandidateAvatar({
+    required this.imageUrl,
+    required this.name,
+    this.radius = 26,
+    this.showWinnerBadge = false,
+  });
+
+  Widget _initials(BuildContext context) {
+    final initial = name.isNotEmpty ? name[0].toUpperCase() : '?';
+    return CircleAvatar(
+      radius: radius,
+      backgroundColor: Colors.blue.shade50,
+      child: Text(
+        initial,
+        style: TextStyle(
+          fontSize: radius * 0.76,
+          fontWeight: FontWeight.bold,
+          color: Colors.blue.shade700,
+        ),
+      ),
+    );
+  }
+
+  Widget _avatar(BuildContext context) {
+    if (imageUrl.isEmpty) return _initials(context);
+    return CircleAvatar(
+      radius: radius,
+      backgroundColor: Colors.blue.shade50,
+      child: ClipOval(
+        child: Image.network(
+          imageUrl,
+          width: radius * 2,
+          height: radius * 2,
+          fit: BoxFit.cover,
+          // errorBuilder runs OUTSIDE the frame — no setState crash
+          errorBuilder: (_, __, ___) => _initials(context),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final av = _avatar(context);
+    if (!showWinnerBadge) return av;
+    return Stack(
+      children: [
+        av,
+        Positioned(
+          right: -2,
+          bottom: -2,
+          child: Container(
+            padding: const EdgeInsets.all(3),
+            decoration: BoxDecoration(
+              color: Colors.amber.shade700,
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.star, color: Colors.white, size: 12),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ─── Student / Voter Login Screen ──────────────────────────────────────────
+class UserLoginScreen extends StatefulWidget {
+  const UserLoginScreen({super.key});
+
+  @override
+  State<UserLoginScreen> createState() => _UserLoginScreenState();
+}
+
+class _UserLoginScreenState extends State<UserLoginScreen> {
+  final _usernameController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _obscurePassword = true;
+  String _errorText = '';
+
+  @override
+  void dispose() {
+    _usernameController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  void _login() {
+    final name = _usernameController.text.trim();
+    final pass = _passwordController.text.trim();
+
+    if (name.isEmpty || pass.isEmpty) {
+      setState(() {
+        _errorText = 'Please enter both your Student Name and Register Number.';
+      });
+      return;
+    }
+
+    if (validateVoterCredentials(name, pass)) {
+      setState(() => _errorText = '');
+      final cleanName = name.toUpperCase();
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => VotingScreen(
+            loggedInUser: cleanName,
+            regNo: pass,
+          ),
+        ),
+      );
+    } else {
+      setState(() {
+        _errorText = 'Invalid Student Name or Password (Register No). Please check and try again.';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Container(
+        width: double.infinity,
+        height: double.infinity,
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Colors.blue.shade900,
+              Colors.blue.shade700,
+              Colors.indigo.shade800,
+            ],
+          ),
+        ),
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 440),
+              child: Card(
+                elevation: 12,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(32),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade50,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          Icons.how_to_vote,
+                          color: Colors.blue.shade700,
+                          size: 48,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'Voter Authentication',
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.blue.shade900,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Fan Base Election Portal',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      if (_errorText.isNotEmpty)
+                        Container(
+                          margin: const EdgeInsets.only(bottom: 16),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.red.shade50,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: Colors.red.shade200),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.error_outline, color: Colors.red.shade700, size: 20),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  _errorText,
+                                  style: TextStyle(color: Colors.red.shade800, fontSize: 13),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      TextFormField(
+                        controller: _usernameController,
+                        textCapitalization: TextCapitalization.characters,
+                        decoration: InputDecoration(
+                          labelText: 'Student Name (Username)',
+                          hintText: 'e.g. ABINAYA D',
+                          prefixIcon: const Icon(Icons.person),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      TextFormField(
+                        controller: _passwordController,
+                        obscureText: _obscurePassword,
+                        keyboardType: TextInputType.number,
+                        onFieldSubmitted: (_) => _login(),
+                        decoration: InputDecoration(
+                          labelText: 'Register Number (Password)',
+                          hintText: 'e.g. 730925106001',
+                          prefixIcon: const Icon(Icons.lock),
+                          suffixIcon: IconButton(
+                            icon: Icon(
+                              _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                            ),
+                            onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                          ),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 48,
+                        child: ElevatedButton(
+                          onPressed: _login,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.blue.shade700,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            elevation: 4,
+                          ),
+                          child: const Text(
+                            'LOGIN TO VOTE',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 1.1,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Text(
+                        'Note: Username is your name in the list, password is your 12-digit register number.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
 
 // ─── Voting Screen (MAIN SCREEN: NO VOTE COUNTS SHOWN) ───────────────────────
 class VotingScreen extends StatefulWidget {
-  const VotingScreen({super.key});
+  final String? loggedInUser;
+  final String? regNo;
+  const VotingScreen({super.key, this.loggedInUser, this.regNo});
   @override
   State<VotingScreen> createState() => _VotingScreenState();
 }
@@ -69,8 +436,10 @@ class VotingScreen extends StatefulWidget {
 class _VotingScreenState extends State<VotingScreen> {
   List<Candidate> _candidates = [];
   bool _isLoading = true;
+  bool _isCheckingVoteStatus = false;
+  bool _hasVoted = false;
+  String _votedCandidateName = '';
   bool _isVotingEnabled = true;
-  int _cooldownSeconds = 0;
   String _errorMessage = '';
   StreamSubscription? _realtimeSub;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
@@ -78,8 +447,80 @@ class _VotingScreenState extends State<VotingScreen> {
   @override
   void initState() {
     super.initState();
+    _patchCandidateImages(); // Fix missing images in Supabase DB
+    _checkIfUserAlreadyVoted();
     _loadCandidates();
     _subscribeRealtime();
+  }
+
+  /// Checks if this student has already cast their single vote in the CURRENT election round.
+  /// Ignores any votes cast prior to the latest "Clear All / Reset" epoch.
+  Future<void> _checkIfUserAlreadyVoted() async {
+    final voterKey = widget.regNo ?? widget.loggedInUser;
+    if (voterKey == null || voterKey.isEmpty) return;
+
+    setState(() => _isCheckingVoteStatus = true);
+    try {
+      // 1. Get the current election start time (stored in Joseph Vijay's created_at)
+      final epochRes = await _supabase
+          .from('candidates')
+          .select('created_at')
+          .eq('name', 'Joseph Vijay')
+          .maybeSingle();
+
+      final epochString = epochRes?['created_at']?.toString() ?? '1970-01-01T00:00:00Z';
+
+      // 2. Only consider votes that happened AFTER this election start time
+      final rows = await _supabase
+          .from('vote_logs')
+          .select('candidate_name')
+          .eq('session_id', voterKey)
+          .gte('voted_at', epochString);
+
+      if (!mounted) return;
+      if (rows.isNotEmpty) {
+        final candName = rows.first['candidate_name']?.toString() ?? '';
+        setState(() {
+          _hasVoted = true;
+          _votedCandidateName = candName;
+          _isVotingEnabled = false;
+          _isCheckingVoteStatus = false;
+        });
+      } else {
+        setState(() {
+          _hasVoted = false;
+          _votedCandidateName = '';
+          _isVotingEnabled = true;
+          _isCheckingVoteStatus = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Check vote error: $e');
+      if (mounted) setState(() => _isCheckingVoteStatus = false);
+    }
+  }
+
+  /// Silently pushes correct image URLs to Supabase for candidates with missing images.
+  Future<void> _patchCandidateImages() async {
+    for (final entry in _candidateImages.entries) {
+      try {
+        final rows = await _supabase
+            .from('candidates')
+            .select('id, image_url')
+            .ilike('name', entry.key);
+        for (final row in rows as List) {
+          final existing = (row['image_url'] as String?)?.trim() ?? '';
+          if (existing.isEmpty) {
+            await _supabase
+                .from('candidates')
+                .update({'image_url': entry.value})
+                .eq('id', row['id']);
+          }
+        }
+      } catch (_) {
+        // Silently ignore — fallback map in _resolveImage still covers it
+      }
+    }
   }
 
   @override
@@ -132,44 +573,126 @@ class _VotingScreenState extends State<VotingScreen> {
   }
 
   Future<void> _castVote(String id, String name) async {
-    if (!_isVotingEnabled) {
+    if (_hasVoted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('⏳ Please wait ${_cooldownSeconds}s before voting again',
-            style: const TextStyle(color: Colors.white)),
-        backgroundColor: Colors.orange.shade700,
+        content: Text('⚠️ You have already voted for $_votedCandidateName! Only 1 vote is allowed per voter.',
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        backgroundColor: Colors.red.shade700,
         behavior: SnackBarBehavior.floating,
       ));
       return;
     }
 
+    if (!_isVotingEnabled) {
+      return;
+    }
+
     setState(() {
       _isVotingEnabled = false;
-      _cooldownSeconds = 2;
     });
 
+    final voterKey = widget.regNo ?? widget.loggedInUser ?? _sessionId;
+
     try {
+      // 1. Get election round start time
+      final epochRes = await _supabase
+          .from('candidates')
+          .select('created_at')
+          .eq('name', 'Joseph Vijay')
+          .maybeSingle();
+      final epochString = epochRes?['created_at']?.toString() ?? '1970-01-01T00:00:00Z';
+
+      // 2. Re-check server-side to guarantee strictly 1 vote per user in this round
+      final existing = await _supabase
+          .from('vote_logs')
+          .select('id')
+          .eq('session_id', voterKey)
+          .gte('voted_at', epochString);
+
+      if (existing.isNotEmpty) {
+        if (!mounted) return;
+        setState(() {
+          _hasVoted = true;
+          _isVotingEnabled = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: const Text('⚠️ You have already cast your vote! Second vote is not permitted.',
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          backgroundColor: Colors.red.shade700,
+          behavior: SnackBarBehavior.floating,
+        ));
+        return;
+      }
+
+      // 1. Increment candidate vote count
       final cur = await _supabase.from('candidates').select('votes').eq('id', id).single();
       final newV = ((cur['votes'] as num?)?.toInt() ?? 0) + 1;
       await _supabase.from('candidates').update({'votes': newV}).eq('id', id);
+
+      // 2. Insert vote log recording the voter's register number / ID
       await _supabase.from('vote_logs').insert({
         'candidate_name': name,
-        'session_id': _sessionId,
+        'session_id': voterKey,
       });
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Row(
-          children: [
-            const Icon(Icons.check_circle, color: Colors.white, size: 20),
-            const SizedBox(width: 8),
-            Text('Vote successfully cast for $name!',
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+      setState(() {
+        _hasVoted = true;
+        _votedCandidateName = name;
+        _isVotingEnabled = false;
+      });
+
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Row(
+            children: [
+              const Icon(Icons.check_circle, color: Colors.green, size: 28),
+              const SizedBox(width: 10),
+              const Text('Vote Recorded!', style: TextStyle(fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Thank you, ${widget.loggedInUser ?? "Voter"}!'),
+              const SizedBox(height: 8),
+              Text(
+                'Your vote for $name has been officially registered.',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue.shade200),
+                ),
+                child: const Text(
+                  '🔒 Each voter is allowed only 1 vote. Your ballot has now been closed.',
+                  style: TextStyle(fontSize: 12, color: Colors.blueGrey),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue.shade700,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('OK'),
+            ),
           ],
         ),
-        backgroundColor: Colors.green.shade700,
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 2),
-      ));
+      );
     } catch (e) {
       debugPrint('Vote error: $e');
       if (!mounted) return;
@@ -181,39 +704,36 @@ class _VotingScreenState extends State<VotingScreen> {
       ));
       setState(() {
         _isVotingEnabled = true;
-        _cooldownSeconds = 0;
       });
-      return;
-    }
-
-    Future.delayed(const Duration(seconds: 1), _tick);
-  }
-
-  void _tick() {
-    if (!mounted) return;
-    if (_cooldownSeconds > 1) {
-      setState(() => _cooldownSeconds--);
-      Future.delayed(const Duration(seconds: 1), _tick);
-    } else {
-      setState(() {
-        _cooldownSeconds = 0;
-        _isVotingEnabled = true;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('✅ Ready! You can vote again.', style: TextStyle(color: Colors.white)),
-        backgroundColor: Colors.green,
-        behavior: SnackBarBehavior.floating,
-        duration: Duration(seconds: 1),
-      ));
     }
   }
 
   Future<void> _resetVotes() async {
     try {
+      final newEpoch = DateTime.now().toUtc().toIso8601String();
+
+      // 1. Reset all candidate vote counters to 0
       await _supabase.from('candidates').update({'votes': 0}).gte('votes', 0);
+
+      // 2. Advance the election epoch timestamp on Joseph Vijay's row (marks new election start)
+      await _supabase.from('candidates').update({'created_at': newEpoch}).eq('name', 'Joseph Vijay');
+
+      // 3. Clear all rows from vote_logs
+      try {
+        await _supabase.from('vote_logs').delete().filter('id', 'not.is', 'null');
+      } catch (e) {
+        debugPrint('Vote logs delete warning (check RLS DELETE policy): $e');
+      }
+
       if (!mounted) return;
+      setState(() {
+        _hasVoted = false;
+        _votedCandidateName = '';
+        _isVotingEnabled = true;
+      });
+
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: const Text('🔄 All candidate votes have been reset to 0!'),
+        content: const Text('🔄 All candidate votes and voter records have been reset!'),
         backgroundColor: Colors.orange.shade700,
         behavior: SnackBarBehavior.floating,
       ));
@@ -229,7 +749,7 @@ class _VotingScreenState extends State<VotingScreen> {
 
   Future<void> _clearAllData() async => _resetVotes();
 
-  void _showAdminLogin() {
+  void _openDashboard() {
     final uc = TextEditingController();
     final pc = TextEditingController();
 
@@ -245,7 +765,7 @@ class _VotingScreenState extends State<VotingScreen> {
               children: [
                 Icon(Icons.admin_panel_settings, color: Colors.blue.shade700, size: 28),
                 const SizedBox(width: 10),
-                Text('Admin Dashboard',
+                Text('Admin Dashboard Login',
                     style: TextStyle(
                         color: Colors.blue.shade700, fontWeight: FontWeight.bold, fontSize: 18)),
               ],
@@ -294,7 +814,7 @@ class _VotingScreenState extends State<VotingScreen> {
                 ),
                 onPressed: () {
                   if (uc.text.trim().toLowerCase() == 'sanjay' &&
-                      pc.text.trim().toLowerCase() == 'sanjay@2007') {
+                      pc.text.trim() == 'sanjay@2007') {
                     Navigator.pop(ctx);
                     Navigator.push(
                       context,
@@ -309,7 +829,12 @@ class _VotingScreenState extends State<VotingScreen> {
                           child: c,
                         ),
                       ),
-                    );
+                    ).then((_) {
+                      if (mounted) {
+                        _checkIfUserAlreadyVoted();
+                        _loadCandidates();
+                      }
+                    });
                   } else {
                     ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
                       content: const Text('Invalid credentials. Access denied.',
@@ -340,6 +865,26 @@ class _VotingScreenState extends State<VotingScreen> {
         foregroundColor: Colors.white,
         elevation: 3,
         actions: [
+          if (widget.loggedInUser != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+              child: Chip(
+                avatar: const CircleAvatar(
+                  backgroundColor: Colors.white,
+                  child: Icon(Icons.person, size: 16, color: Colors.blue),
+                ),
+                label: Text(
+                  widget.loggedInUser!,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
+                ),
+                backgroundColor: Colors.blue.shade900,
+                side: BorderSide.none,
+              ),
+            ),
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Refresh Ballot',
@@ -347,10 +892,21 @@ class _VotingScreenState extends State<VotingScreen> {
             iconSize: 24,
           ),
           IconButton(
-            icon: const Icon(Icons.dashboard_customize),
-            tooltip: 'Admin Dashboard (Vote Counts)',
-            onPressed: _showAdminLogin,
+            icon: const Icon(Icons.bar_chart_rounded),
+            tooltip: 'Live Results Dashboard',
+            onPressed: _openDashboard,
             iconSize: 26,
+          ),
+          IconButton(
+            icon: const Icon(Icons.logout),
+            tooltip: 'Logout',
+            onPressed: () {
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(builder: (_) => const UserLoginScreen()),
+              );
+            },
+            iconSize: 24,
           ),
         ],
       ),
@@ -413,42 +969,57 @@ class _VotingScreenState extends State<VotingScreen> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 300),
-                      child: !_isVotingEnabled
-                          ? Container(
-                              key: const ValueKey('cd'),
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
-                              decoration: BoxDecoration(
-                                color: Colors.orange.shade700,
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child: Text(
-                                '⏳ Wait ${_cooldownSeconds}s',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 13,
-                                ),
-                              ),
-                            )
-                          : Container(
-                              key: const ValueKey('rdy'),
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
-                              decoration: BoxDecoration(
-                                color: Colors.green.shade700,
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child: const Text(
-                                '✅ Ready to Vote',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 13,
-                                ),
+                    if (_isCheckingVoteStatus)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade400,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: const Text(
+                          'Checking Status...',
+                          style: TextStyle(color: Colors.white, fontSize: 13),
+                        ),
+                      )
+                    else if (_hasVoted)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: Colors.purple.shade700,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.check_circle, color: Colors.white, size: 14),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Voted: $_votedCandidateName (1/1)',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
                               ),
                             ),
-                    ),
+                          ],
+                        ),
+                      )
+                    else
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: Colors.green.shade700,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: const Text(
+                          '✅ Ready (1 Vote Allowed)',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ],
@@ -489,73 +1060,87 @@ class _VotingScreenState extends State<VotingScreen> {
                             itemCount: _candidates.length,
                             itemBuilder: (ctx, i) {
                               final c = _candidates[i];
+                              final isThisVoted = _hasVoted && _votedCandidateName.toLowerCase() == c.name.toLowerCase();
+
                               return Card(
                                 elevation: 2,
                                 margin: const EdgeInsets.symmetric(vertical: 6),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(12),
-                                  side: BorderSide(color: Colors.grey.shade200),
+                                  side: BorderSide(
+                                    color: isThisVoted ? Colors.purple.shade300 : Colors.grey.shade200,
+                                    width: isThisVoted ? 2 : 1,
+                                  ),
                                 ),
                                 child: Padding(
                                   padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
                                   child: ListTile(
-                                    leading: CircleAvatar(
+                                    leading: _CandidateAvatar(
+                                      imageUrl: c.imageUrl,
+                                      name: c.name,
                                       radius: 26,
-                                      backgroundColor: Colors.blue.shade50,
-                                      backgroundImage: NetworkImage(c.imageUrl),
-                                      onBackgroundImageError: (_, __) {},
-                                      child: c.imageUrl.isEmpty
-                                          ? Text(
-                                              c.name.isNotEmpty ? c.name[0] : '?',
-                                              style: TextStyle(
-                                                fontSize: 20,
-                                                fontWeight: FontWeight.bold,
-                                                color: Colors.blue.shade700,
-                                              ),
-                                            )
-                                          : null,
                                     ),
                                     title: Text(
                                       c.name,
-                                      style: const TextStyle(
+                                      style: TextStyle(
                                         fontWeight: FontWeight.bold,
                                         fontSize: 16,
+                                        color: isThisVoted ? Colors.purple.shade900 : Colors.black87,
                                       ),
                                     ),
                                     subtitle: Text(
-                                      'Official Candidate',
+                                      isThisVoted ? 'Your Chosen Candidate' : 'Official Candidate',
                                       style: TextStyle(
-                                        color: Colors.grey.shade500,
+                                        color: isThisVoted ? Colors.purple.shade600 : Colors.grey.shade500,
                                         fontSize: 12,
+                                        fontWeight: isThisVoted ? FontWeight.bold : FontWeight.normal,
                                       ),
                                     ),
                                     trailing: SizedBox(
                                       height: 44,
-                                      width: 96,
+                                      width: 104,
                                       child: ElevatedButton(
                                         onPressed:
-                                            _isVotingEnabled ? () => _castVote(c.id, c.name) : null,
+                                            (!_hasVoted && _isVotingEnabled) ? () => _castVote(c.id, c.name) : null,
                                         style: ElevatedButton.styleFrom(
-                                          backgroundColor: _isVotingEnabled
-                                              ? Colors.blue.shade700
-                                              : Colors.grey.shade400,
+                                          backgroundColor: isThisVoted
+                                              ? Colors.purple.shade700
+                                              : (!_hasVoted && _isVotingEnabled)
+                                                  ? Colors.blue.shade700
+                                                  : Colors.grey.shade400,
                                           foregroundColor: Colors.white,
-                                          elevation: _isVotingEnabled ? 3 : 0,
+                                          elevation: (!_hasVoted && _isVotingEnabled) ? 3 : 0,
                                           shape: RoundedRectangleBorder(
                                             borderRadius: BorderRadius.circular(8),
                                           ),
                                           padding: EdgeInsets.zero,
                                         ),
-                                        child: _isVotingEnabled
+                                        child: isThisVoted
                                             ? const Text(
-                                                'VOTE',
+                                                'VOTED',
                                                 style: TextStyle(
                                                   fontWeight: FontWeight.bold,
-                                                  fontSize: 14,
-                                                  letterSpacing: 1.2,
+                                                  fontSize: 13,
+                                                  letterSpacing: 1.0,
                                                 ),
                                               )
-                                            : const Icon(Icons.timer, size: 20),
+                                            : _hasVoted
+                                                ? const Text(
+                                                    'LOCKED',
+                                                    style: TextStyle(
+                                                      fontWeight: FontWeight.bold,
+                                                      fontSize: 13,
+                                                      letterSpacing: 1.0,
+                                                    ),
+                                                  )
+                                                : const Text(
+                                                    'VOTE',
+                                                    style: TextStyle(
+                                                      fontWeight: FontWeight.bold,
+                                                      fontSize: 14,
+                                                      letterSpacing: 1.2,
+                                                    ),
+                                                  ),
                                       ),
                                     ),
                                   ),
@@ -642,8 +1227,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       });
     } catch (_) {}
 
-    // 2. Continuous 2-second polling fallback so dashboard ALWAYS stays up-to-date
-    _pollingTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+    // 2. Continuous 1-second polling fallback so dashboard ALWAYS stays up-to-date
+    _pollingTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       _fetchCandidates();
     });
   }
@@ -844,39 +1429,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                   child: Padding(
                                     padding: const EdgeInsets.symmetric(vertical: 6),
                                     child: ListTile(
-                                      leading: Stack(
-                                        children: [
-                                          CircleAvatar(
-                                            radius: 24,
-                                            backgroundColor: Colors.blue.shade50,
-                                            backgroundImage: NetworkImage(c.imageUrl),
-                                            onBackgroundImageError: (_, __) {},
-                                            child: c.imageUrl.isEmpty
-                                                ? Text(
-                                                    c.name.isNotEmpty ? c.name[0] : '?',
-                                                    style: TextStyle(
-                                                      fontSize: 18,
-                                                      fontWeight: FontWeight.bold,
-                                                      color: Colors.blue.shade700,
-                                                    ),
-                                                  )
-                                                : null,
-                                          ),
-                                          if (isWinner)
-                                            Positioned(
-                                              right: -2,
-                                              bottom: -2,
-                                              child: Container(
-                                                padding: const EdgeInsets.all(3),
-                                                decoration: BoxDecoration(
-                                                  color: Colors.amber.shade700,
-                                                  shape: BoxShape.circle,
-                                                ),
-                                                child: const Icon(Icons.star,
-                                                    color: Colors.white, size: 12),
-                                              ),
-                                            ),
-                                        ],
+                                      leading: _CandidateAvatar(
+                                        imageUrl: c.imageUrl,
+                                        name: c.name,
+                                        radius: 24,
+                                        showWinnerBadge: isWinner,
                                       ),
                                       title: Row(
                                         children: [
